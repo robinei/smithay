@@ -17,6 +17,13 @@
 //!
 //! The other types in this module are the instances of the associated types of these
 //! two traits for the winit backend.
+//!
+//! Raw pointer motion is forwarded through [`InputEvent::PointerMotion`] only while the backend
+//! window has focus. A physical movement can produce both [`InputEvent::PointerMotionAbsolute`]
+//! and [`InputEvent::PointerMotion`]. Consumers should avoid moving their cursor twice: absolute
+//! events can position a free cursor, while raw relative events drive captured-pointer input.
+//! Winit supplies unfiltered, device-dependent displacement, so both relative channels carry the
+//! same raw delta; this backend does not apply an acceleration function.
 
 use std::io::Error as IoError;
 use std::mem;
@@ -34,7 +41,7 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{ButtonSource, ElementState, PointerKind, PointerSource, WindowEvent},
+    event::{ButtonSource, DeviceEvent, DeviceId, ElementState, PointerKind, PointerSource, WindowEvent},
     event_loop::{
         ActiveEventLoop, EventLoop,
         pump_events::{EventLoopExtPumpEvents, PumpStatus},
@@ -494,6 +501,13 @@ impl WinitEventLoop {
     }
 }
 
+fn raw_pointer_delta(focused: bool, event: DeviceEvent) -> Option<(f64, f64)> {
+    match event {
+        DeviceEvent::PointerMotion { delta } if focused => Some(delta),
+        _ => None,
+    }
+}
+
 struct WinitEventLoopApp<'a, F: FnMut(WinitEvent)> {
     inner: &'a mut WinitEventLoopInner,
     callback: F,
@@ -507,6 +521,23 @@ impl<F: FnMut(WinitEvent)> WinitEventLoopApp<'_, F> {
 }
 
 impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
+    fn device_event(&mut self, _: &dyn ActiveEventLoop, _: Option<DeviceId>, event: DeviceEvent) {
+        let focused = self
+            .inner
+            .window
+            .as_ref()
+            .is_some_and(|window| window.has_focus());
+        if let Some(delta) = raw_pointer_delta(focused, event) {
+            let event = InputEvent::PointerMotion {
+                event: WinitMouseMotionEvent {
+                    time: self.timestamp(),
+                    delta,
+                },
+            };
+            (self.callback)(WinitEvent::Input(event));
+        }
+    }
+
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.inner.window.is_none() {
             match event_loop.create_window(self.inner.window_attributes.clone()) {
@@ -874,4 +905,29 @@ pub enum WinitEvent {
 
     /// A redraw was requested
     Redraw,
+}
+
+#[cfg(test)]
+mod raw_pointer_tests {
+    use super::*;
+    #[test]
+    fn raw_pointer_motion_is_forwarded_only_for_the_focused_window() {
+        assert_eq!(
+            raw_pointer_delta(true, DeviceEvent::PointerMotion { delta: (2.5, -4.25) }),
+            Some((2.5, -4.25))
+        );
+        assert_eq!(
+            raw_pointer_delta(false, DeviceEvent::PointerMotion { delta: (2.5, -4.25) }),
+            None
+        );
+        assert_eq!(
+            raw_pointer_delta(
+                true,
+                DeviceEvent::MouseWheel {
+                    delta: winit::event::MouseScrollDelta::LineDelta(1.0, 2.0)
+                }
+            ),
+            None
+        );
+    }
 }

@@ -10,7 +10,8 @@ use crate::backend::input::{
     DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
     GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent, InputBackend, InputTime, KeyState,
     KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent,
-    TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
+    PointerMotionEvent, TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot,
+    TouchUpEvent, UnusedEvent,
 };
 
 /// Marker used to define the `InputBackend` types for the winit backend.
@@ -79,6 +80,38 @@ impl KeyboardKeyEvent<WinitInput> for WinitKeyboardInputEvent {
 
     fn count(&self) -> u32 {
         self.count
+    }
+}
+
+/// Raw pointer motion from winit. Both relative channels are unaccelerated because winit
+/// does not expose a separate accelerated displacement for raw device events.
+#[derive(Debug, Clone)]
+pub struct WinitMouseMotionEvent {
+    pub(crate) time: InputTime,
+    pub(crate) delta: (f64, f64),
+}
+
+impl Event<WinitInput> for WinitMouseMotionEvent {
+    fn time(&self) -> InputTime {
+        self.time
+    }
+    fn device(&self) -> WinitVirtualDevice {
+        WinitVirtualDevice
+    }
+}
+
+impl PointerMotionEvent<WinitInput> for WinitMouseMotionEvent {
+    fn delta_x(&self) -> f64 {
+        self.delta.0
+    }
+    fn delta_y(&self) -> f64 {
+        self.delta.1
+    }
+    fn delta_x_unaccel(&self) -> f64 {
+        self.delta.0
+    }
+    fn delta_y_unaccel(&self) -> f64 {
+        self.delta.1
     }
 }
 
@@ -529,7 +562,7 @@ impl InputBackend for WinitInput {
     type KeyboardKeyEvent = WinitKeyboardInputEvent;
     type PointerAxisEvent = WinitMouseWheelEvent;
     type PointerButtonEvent = WinitMouseInputEvent;
-    type PointerMotionEvent = UnusedEvent;
+    type PointerMotionEvent = WinitMouseMotionEvent;
     type PointerMotionAbsoluteEvent = WinitMouseMovedEvent;
 
     type GestureSwipeBeginEvent = UnusedEvent;
