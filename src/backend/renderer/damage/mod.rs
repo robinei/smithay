@@ -195,6 +195,7 @@ pub struct OutputDamageTracker {
     last_state: RendererState,
     damage_shaper: DamageShaper,
     damage: Vec<Rectangle<i32, Physical>>,
+    new_damage: Vec<Rectangle<i32, Physical>>,
     element_damage: Vec<Rectangle<i32, Physical>>,
     opaque_regions: Vec<Rectangle<i32, Physical>>,
     opaque_regions_index: Vec<Range<usize>>,
@@ -261,6 +262,7 @@ impl OutputDamageTracker {
             last_state: Default::default(),
             damage_shaper: Default::default(),
             damage: Default::default(),
+            new_damage: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -281,6 +283,7 @@ impl OutputDamageTracker {
             mode: OutputModeSource::Auto(output.downgrade()),
             damage_shaper: Default::default(),
             damage: Default::default(),
+            new_damage: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -303,6 +306,7 @@ impl OutputDamageTracker {
             span: info_span!("render_damage"),
             damage_shaper: Default::default(),
             damage: Default::default(),
+            new_damage: Default::default(),
             element_damage: Default::default(),
             element_opaque_regions: Default::default(),
             opaque_regions: Default::default(),
@@ -735,14 +739,12 @@ impl OutputDamageTracker {
         }
 
         // That is all completely new damage, which we need to store for subsequent renders
-        let mut new_damage = self.damage.clone();
-        new_damage.shrink_to_fit();
+        self.new_damage.clear();
+        self.new_damage.extend_from_slice(&self.damage);
 
         // We now add old damage states, if we have an age value
         if age > 0 && self.last_state.old_damage.len() >= age {
             trace!("age of {} recent enough, using old damage", age);
-            // We do not need even older states anymore
-            self.last_state.old_damage.truncate(age);
             self.damage
                 .extend(self.last_state.old_damage.iter().take(age - 1).flatten().copied());
         } else {
@@ -751,10 +753,6 @@ impl OutputDamageTracker {
                 age,
                 self.last_state.old_damage.len(),
             );
-            // we still truncate the old damage to prevent growing
-            // indefinitely in case we are continuously called with
-            // an age of 0
-            self.last_state.old_damage.truncate(MAX_AGE);
             // just damage everything, if we have no damage
             self.damage.clear();
             self.damage.push(output_geo);
@@ -830,12 +828,20 @@ impl OutputDamageTracker {
         self.last_state.size = Some(output_geo.size);
         self.last_state.transform = Some(output_transform);
         self.last_state.elements = new_elements_state;
-        self.last_state.old_damage.push_front(new_damage);
+        // Store the new damage in the allocation of the oldest damage, once we keep
+        // enough of it, so the old damage does not grow indefinitely
+        let mut old_damage = if self.last_state.old_damage.len() > MAX_AGE {
+            self.last_state.old_damage.pop_back().unwrap_or_default()
+        } else {
+            Vec::with_capacity(self.new_damage.len())
+        };
+        old_damage.clear();
+        old_damage.extend_from_slice(&self.new_damage);
+        self.last_state.old_damage.push_front(old_damage);
         self.last_state.opaque_regions.clear();
         self.last_state
             .opaque_regions
             .extend(self.opaque_regions.iter().copied());
-        self.last_state.opaque_regions.shrink_to_fit();
         self.last_state.clear_color = clear_color;
 
         element_render_states
