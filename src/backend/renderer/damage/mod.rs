@@ -197,6 +197,7 @@ pub struct OutputDamageTracker {
     damage: Vec<Rectangle<i32, Physical>>,
     new_damage: Vec<Rectangle<i32, Physical>>,
     render_elements: Vec<usize>,
+    spare_states: HashMap<Id, RenderElementState>,
     element_damage: Vec<Rectangle<i32, Physical>>,
     opaque_regions: Vec<Rectangle<i32, Physical>>,
     opaque_regions_index: Vec<Range<usize>>,
@@ -265,6 +266,7 @@ impl OutputDamageTracker {
             damage: Default::default(),
             new_damage: Default::default(),
             render_elements: Default::default(),
+            spare_states: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -287,6 +289,7 @@ impl OutputDamageTracker {
             damage: Default::default(),
             new_damage: Default::default(),
             render_elements: Default::default(),
+            spare_states: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -311,6 +314,7 @@ impl OutputDamageTracker {
             damage: Default::default(),
             new_damage: Default::default(),
             render_elements: Default::default(),
+            spare_states: Default::default(),
             element_damage: Default::default(),
             element_opaque_regions: Default::default(),
             opaque_regions: Default::default(),
@@ -324,6 +328,13 @@ impl OutputDamageTracker {
     /// Get the [`OutputModeSource`] of the [`OutputDamageTracker`]
     pub fn mode(&self) -> &OutputModeSource {
         &self.mode
+    }
+
+    /// Hand back the [`RenderElementStates`] of an earlier render
+    ///
+    /// The next render reuses their allocation for the states it returns.
+    pub fn reuse_states(&mut self, states: RenderElementStates) {
+        self.spare_states = states.states;
     }
 
     /// Render this output with the provided [`Renderer`]
@@ -493,8 +504,10 @@ impl OutputDamageTracker {
         self.render_elements.clear();
 
         let mut element_render_states = RenderElementStates {
-            states: HashMap::with_capacity(elements.len()),
+            states: std::mem::take(&mut self.spare_states),
         };
+        element_render_states.states.clear();
+        element_render_states.states.reserve(elements.len());
 
         // we have to take the element damage to be able to move it around
         let mut element_damage = std::mem::take(&mut self.element_damage);
