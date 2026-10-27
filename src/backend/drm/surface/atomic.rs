@@ -352,6 +352,7 @@ impl AtomicDrmSurface {
                     damage_clips: None,
                     fb: test_buffer.fb,
                     fence: None,
+                    properties: &[],
                 }),
             };
 
@@ -411,6 +412,7 @@ impl AtomicDrmSurface {
                 damage_clips: None,
                 fb: test_buffer.fb,
                 fence: None,
+                properties: &[],
             }),
         };
 
@@ -471,6 +473,7 @@ impl AtomicDrmSurface {
                 damage_clips: None,
                 fb: test_buffer.fb,
                 fence: None,
+                properties: &[],
             }),
         };
         let req = AtomicRequest::build_request(
@@ -525,6 +528,7 @@ impl AtomicDrmSurface {
                 damage_clips: None,
                 fb: test_buffer.fb,
                 fence: None,
+                properties: &[],
             }),
         };
         let req = AtomicRequest::build_request(
@@ -647,6 +651,7 @@ impl AtomicDrmSurface {
                 damage_clips: None,
                 fb: test_buffer.fb,
                 fence: None,
+                properties: &[],
             }),
         };
 
@@ -1140,6 +1145,11 @@ struct AtomicRequest<'a> {
     crtc_props: HashMap<crtc::Handle, HashMap<&'static str, property::Value<'a>>>,
     connector_props: HashMap<connector::Handle, HashMap<&'static str, property::Value<'a>>>,
     plane_props: HashMap<plane::Handle, HashMap<&'static str, property::Value<'a>>>,
+    properties: Vec<(
+        drm::control::RawResourceHandle,
+        property::Handle,
+        property::RawValue,
+    )>,
 }
 
 #[cfg(not(debug_assertions))]
@@ -1168,6 +1178,7 @@ impl<'a> AtomicRequest<'a> {
             crtc_props: HashMap::new(),
             connector_props: HashMap::new(),
             plane_props: HashMap::new(),
+            properties: Vec::new(),
         }
     }
 
@@ -1294,6 +1305,7 @@ impl<'a> AtomicRequest<'a> {
                     name: "IN_FENCE_FD",
                 });
             }
+            self.properties.extend_from_slice(config.properties);
         } else {
             self.reset_plane(handle)?;
         }
@@ -1352,6 +1364,9 @@ impl<'a> AtomicRequest<'a> {
             for (name, value) in props {
                 req.add_property(*plane, self.mapping.plane_prop_handle(*plane, name)?, *value);
             }
+        }
+        for (object, property, value) in &self.properties {
+            req.add_raw_property(*object, *property, *value);
         }
 
         Ok(req)
@@ -1544,6 +1559,9 @@ impl<'a> AtomicRequest<'a> {
                     handle: handle.into(),
                     name: "IN_FENCE_FD",
                 });
+            }
+            for (object, property, value) in config.properties {
+                self.request.add_raw_property(*object, *property, *value);
             }
         } else {
             self.reset_plane(handle)?;

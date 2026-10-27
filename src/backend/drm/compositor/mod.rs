@@ -819,6 +819,7 @@ impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
                         .sync
                         .as_ref()
                         .and_then(|(_, fence)| fence.as_ref().map(|fence| fence.as_fd())),
+                    properties: &[],
                 }),
             })
     }

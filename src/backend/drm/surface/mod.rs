@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use drm::Device as BasicDevice;
-use drm::control::{Device as ControlDevice, Mode, connector, crtc, framebuffer, plane};
+use drm::control::{
+    Device as ControlDevice, Mode, RawResourceHandle, connector, crtc, framebuffer, plane, property,
+};
 
 use libc::dev_t;
 
@@ -157,6 +159,11 @@ pub struct PlaneConfig<'a> {
     pub fb: framebuffer::Handle,
     /// Optional fence
     pub fence: Option<BorrowedFd<'a>>,
+    /// Further properties to set in the same commit, of the plane or of other objects, by their raw
+    /// handles: for example the plane's `COLOR_PIPELINE` and the properties of its color operations.
+    ///
+    /// Only supported by atomic surfaces.
+    pub properties: &'a [(RawResourceHandle, property::Handle, property::RawValue)],
 }
 
 /// VRR support state
@@ -548,6 +555,11 @@ fn ensure_legacy_planes<'a>(
 
     if config.transform != Transform::Normal {
         // legacy does not support transform
+        return Err(Error::UnsupportedPlaneConfiguration(state.handle));
+    }
+
+    if !config.properties.is_empty() {
+        // legacy can not set arbitrary properties
         return Err(Error::UnsupportedPlaneConfiguration(state.handle));
     }
 
