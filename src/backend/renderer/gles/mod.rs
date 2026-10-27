@@ -2619,6 +2619,14 @@ impl GlesFrame<'_, '_> {
         self.tex_program_override = None;
     }
 
+    /// Resets a texture shader override previously set by [`GlesFrame::override_default_tex_program`]
+    /// and returns it.
+    ///
+    /// This allows reusing the allocation of the additional uniforms for the next override.
+    pub fn take_tex_program_override(&mut self) -> Option<(GlesTexProgram, Vec<Uniform<'static>>)> {
+        self.tex_program_override.take()
+    }
+
     /// Draw a solid color to the current target at the specified destination with the specified color.
     #[instrument(level = "trace", skip(self), parent = &self.span)]
     #[profiling::function]
