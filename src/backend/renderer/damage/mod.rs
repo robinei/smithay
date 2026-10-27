@@ -196,6 +196,7 @@ pub struct OutputDamageTracker {
     damage_shaper: DamageShaper,
     damage: Vec<Rectangle<i32, Physical>>,
     new_damage: Vec<Rectangle<i32, Physical>>,
+    render_elements: Vec<usize>,
     element_damage: Vec<Rectangle<i32, Physical>>,
     opaque_regions: Vec<Rectangle<i32, Physical>>,
     opaque_regions_index: Vec<Range<usize>>,
@@ -263,6 +264,7 @@ impl OutputDamageTracker {
             damage_shaper: Default::default(),
             damage: Default::default(),
             new_damage: Default::default(),
+            render_elements: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -284,6 +286,7 @@ impl OutputDamageTracker {
             damage_shaper: Default::default(),
             damage: Default::default(),
             new_damage: Default::default(),
+            render_elements: Default::default(),
             element_damage: Default::default(),
             opaque_regions: Default::default(),
             opaque_regions_index: Default::default(),
@@ -307,6 +310,7 @@ impl OutputDamageTracker {
             damage_shaper: Default::default(),
             damage: Default::default(),
             new_damage: Default::default(),
+            render_elements: Default::default(),
             element_damage: Default::default(),
             element_opaque_regions: Default::default(),
             opaque_regions: Default::default(),
@@ -353,8 +357,6 @@ impl OutputDamageTracker {
         // damage with the wrong size
         let output_geo = Rectangle::from_size(output_transform.transform_size(output_size));
 
-        // This will hold all the damage we need for this rendering step
-        let mut render_elements: Vec<&E> = Vec::with_capacity(elements.len());
         let states = self.damage_output_internal(
             age,
             elements,
@@ -362,7 +364,6 @@ impl OutputDamageTracker {
             output_transform,
             output_geo,
             Some(clear_color),
-            &mut render_elements,
             None,
         );
 
@@ -371,7 +372,7 @@ impl OutputDamageTracker {
             return Ok(RenderOutputResult::skipped(states));
         }
 
-        self.render_output_internal(renderer, framebuffer, &render_elements, clear_color, states)
+        self.render_output_internal(renderer, framebuffer, elements, clear_color, states)
     }
 
     /// Render this output with the provided [`Renderer`] and provided states.
@@ -410,8 +411,6 @@ impl OutputDamageTracker {
         // damage with the wrong size
         let output_geo = Rectangle::from_size(output_transform.transform_size(output_size));
 
-        // This will hold all the damage we need for this rendering step
-        let mut render_elements: Vec<&E> = Vec::with_capacity(elements.len());
         let _ = self.damage_output_internal(
             age,
             elements,
@@ -419,7 +418,6 @@ impl OutputDamageTracker {
             output_transform,
             output_geo,
             Some(clear_color),
-            &mut render_elements,
             Some(&states),
         );
 
@@ -428,7 +426,7 @@ impl OutputDamageTracker {
             return Ok(RenderOutputResult::skipped(states));
         }
 
-        self.render_output_internal(renderer, framebuffer, &render_elements, clear_color, states)
+        self.render_output_internal(renderer, framebuffer, elements, clear_color, states)
     }
 
     /// Damage this output and return the damage without actually rendering the difference
@@ -455,7 +453,6 @@ impl OutputDamageTracker {
         // damage with the wrong size
         let output_geo = Rectangle::from_size(output_transform.transform_size(output_size));
 
-        let mut render_elements: Vec<&E> = Vec::with_capacity(elements.len());
         let states = self.damage_output_internal(
             age,
             elements,
@@ -463,7 +460,6 @@ impl OutputDamageTracker {
             output_transform,
             output_geo,
             self.last_state.clear_color,
-            &mut render_elements,
             None,
         );
 
@@ -476,15 +472,14 @@ impl OutputDamageTracker {
 
     #[allow(clippy::too_many_arguments)]
     #[profiling::function]
-    fn damage_output_internal<'a, E>(
+    fn damage_output_internal<E>(
         &mut self,
         age: usize,
-        elements: &'a [E],
+        elements: &[E],
         output_scale: Scale<f64>,
         output_transform: Transform,
         output_geo: Rectangle<i32, Physical>,
         clear_color: Option<Color32F>,
-        render_elements: &mut Vec<&'a E>,
         with_states: Option<&RenderElementStates>,
     ) -> RenderElementStates
     where
@@ -494,6 +489,8 @@ impl OutputDamageTracker {
         self.opaque_regions.clear();
         self.opaque_regions_index.clear();
         self.element_damage_index.clear();
+        // The indices of the elements to render
+        self.render_elements.clear();
 
         let mut element_render_states = RenderElementStates {
             states: HashMap::with_capacity(elements.len()),
@@ -504,7 +501,7 @@ impl OutputDamageTracker {
 
         let mut element_visible_area_workhouse = std::mem::take(&mut self.element_visible_area_workhouse);
         let mut render_element_z_index = 0;
-        for element in elements.iter() {
+        for (index, element) in elements.iter().enumerate() {
             let element_id = element.id();
             let element_loc = element.geometry(output_scale).loc;
 
@@ -600,7 +597,7 @@ impl OutputDamageTracker {
                 .push(element_opaque_regions_start_index..element_opaque_regions_end_index);
 
             render_element_z_index += 1;
-            render_elements.push(element);
+            self.render_elements.push(index);
 
             if let Some(state) = element_render_states.states.get_mut(element_id) {
                 if matches!(state.presentation_state, RenderElementPresentationState::Skipped) {
@@ -690,9 +687,12 @@ impl OutputDamageTracker {
             force_effect_redraw = true;
         }
 
+        let render_elements = &self.render_elements;
+
         // for backdrop elements check if anything below them changed and add full-damage, if it did.
         for (z_index, element) in render_elements
             .iter()
+            .map(|&index| &elements[index])
             .enumerate()
             .rev()
             .filter(|(_, e)| e.is_framebuffer_effect())
@@ -784,7 +784,8 @@ impl OutputDamageTracker {
             render_elements
                 .iter()
                 .enumerate()
-                .fold(new_elements_state, |mut map, (z_index, elem)| {
+                .fold(new_elements_state, |mut map, (z_index, &index)| {
+                    let elem = &elements[index];
                     let id = elem.id();
                     let elem_src = elem.src();
                     let elem_alpha = elem.alpha();
@@ -847,13 +848,13 @@ impl OutputDamageTracker {
         element_render_states
     }
 
-    #[instrument(level = "trace", parent = &self.span, skip(renderer, framebuffer, render_elements, clear_color, states))]
+    #[instrument(level = "trace", parent = &self.span, skip(renderer, framebuffer, elements, clear_color, states))]
     #[profiling::function]
     fn render_output_internal<E, R>(
         &mut self,
         renderer: &mut R,
         framebuffer: &mut R::Framebuffer<'_>,
-        render_elements: &[E],
+        elements: &[E],
         clear_color: Color32F,
         states: RenderElementStates,
     ) -> Result<RenderOutputResult<'_>, Error<R::Error>>
@@ -887,7 +888,8 @@ impl OutputDamageTracker {
             trace!("clearing damage {:?}", element_damage);
             frame.clear(clear_color, &element_damage)?;
 
-            for (z_index, element) in render_elements.iter().rev().enumerate() {
+            for (z_index, &index) in self.render_elements.iter().rev().enumerate() {
+                let element = &elements[index];
                 let element_id = element.id();
                 let element_geometry = element.geometry(output_scale);
 
