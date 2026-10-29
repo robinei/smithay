@@ -517,6 +517,22 @@ impl DrmSurface {
             DrmSurfaceInternal::Legacy(surf) => surf.clear(),
         }
     }
+
+    /// Sets whether commits that need a modeset, such as the first after a mode change or a
+    /// [`clear`][Self::clear], and `clear` itself, return without waiting for the hardware.
+    ///
+    /// A modeset can take tens to hundreds of milliseconds (a panel's power sequence), during which a
+    /// blocking commit holds the caller's thread. With this set, a commit with an event returns at once and
+    /// its completion arrives as the page-flip event, as for any other commit; a commit made before an
+    /// earlier one has completed fails with `EBUSY`. It is off by default, since some drivers have failed
+    /// this way (see the comment at the atomic commit).
+    ///
+    /// Only atomic surfaces take it; a legacy surface's modeset always waits.
+    pub fn set_nonblocking_modesets(&self, nonblocking: bool) {
+        if let DrmSurfaceInternal::Atomic(surf) = &*self.internal {
+            surf.set_nonblocking_modesets(nonblocking);
+        }
+    }
 }
 
 fn ensure_legacy_planes<'a>(

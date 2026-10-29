@@ -172,6 +172,7 @@ pub struct AtomicDrmSurface {
     prop_mapping: Arc<RwLock<PropMapping>>,
     state: RwLock<State>,
     pending: RwLock<State>,
+    nonblocking_modesets: AtomicBool,
     pub(super) span: tracing::Span,
 }
 
@@ -219,6 +220,7 @@ impl AtomicDrmSurface {
             prop_mapping,
             state: RwLock::new(state),
             pending: RwLock::new(pending),
+            nonblocking_modesets: AtomicBool::new(false),
             span,
         };
 
@@ -832,15 +834,19 @@ impl AtomicDrmSurface {
             .atomic_commit(
                 if event {
                     // on the atomic api we can modeset and trigger a page_flip event on the same call!
-                    AtomicCommitFlags::PAGE_FLIP_EVENT | AtomicCommitFlags::ALLOW_MODESET
+                    let flags = AtomicCommitFlags::PAGE_FLIP_EVENT | AtomicCommitFlags::ALLOW_MODESET;
                     // we also *should* not need to wait for completion, like with `set_crtc`,
                     // because we have tested this exact commit already, so we do not expect any errors later down the line.
                     //
                     // but there is always an exception and `amdgpu` can fail in interesting ways with this flag set...
                     // https://gitlab.freedesktop.org/drm/amd/-/issues?scope=all&utf8=%E2%9C%93&state=opened&search=drm_atomic_helper_wait_for_flip_done
                     //
-                    // so we skip this flag:
-                    // AtomicCommitFlags::Nonblock,
+                    // so the flag is only set when asked for (see `set_nonblocking_modesets`).
+                    if self.nonblocking_modesets.load(Ordering::SeqCst) {
+                        flags | AtomicCommitFlags::NONBLOCK
+                    } else {
+                        flags
+                    }
                 } else {
                     AtomicCommitFlags::ALLOW_MODESET
                 },
@@ -985,16 +991,18 @@ impl AtomicDrmSurface {
         req.reset_crtc(self.crtc)?;
         std::mem::drop(current);
 
-        let res = self
-            .fd
-            .atomic_commit(AtomicCommitFlags::ALLOW_MODESET, req.build()?)
-            .map_err(|source| {
-                Error::Access(AccessError {
-                    errmsg: "Failed to commit on clear_state",
-                    dev: self.fd.dev_path(),
-                    source,
-                })
-            });
+        let flags = if self.nonblocking_modesets.load(Ordering::SeqCst) {
+            AtomicCommitFlags::ALLOW_MODESET | AtomicCommitFlags::NONBLOCK
+        } else {
+            AtomicCommitFlags::ALLOW_MODESET
+        };
+        let res = self.fd.atomic_commit(flags, req.build()?).map_err(|source| {
+            Error::Access(AccessError {
+                errmsg: "Failed to commit on clear_state",
+                dev: self.fd.dev_path(),
+                source,
+            })
+        });
 
         if res.is_ok() {
             self.used_planes.lock().unwrap().clear();
@@ -1036,6 +1044,13 @@ impl AtomicDrmSurface {
 
     pub fn clear(&self) -> Result<(), Error> {
         self.clear_state()
+    }
+
+    /// Whether commits that change the mode or the active state, and [`clear`][Self::clear], return without
+    /// waiting for the hardware (`DRM_MODE_ATOMIC_NONBLOCK`). See
+    /// [`DrmSurface::set_nonblocking_modesets`][super::DrmSurface::set_nonblocking_modesets].
+    pub fn set_nonblocking_modesets(&self, nonblocking: bool) {
+        self.nonblocking_modesets.store(nonblocking, Ordering::SeqCst);
     }
 }
 
