@@ -323,7 +323,18 @@ impl DrmDevice {
             return Err(Error::DeviceInactive);
         }
 
-        let planes = self.planes(&crtc)?;
+        let mut planes = self.planes(&crtc)?;
+
+        // Where any primary plane can serve any crtc, prefer the one already showing this crtc, then
+        // one showing none: a plane still showing another crtc (left by the console, for example)
+        // can't move to this one in a single commit.
+        planes.primary.sort_by_key(|plane| {
+            match self.get_plane(plane.handle).ok().and_then(|info| info.crtc()) {
+                Some(current) if current == crtc => 0,
+                None => 1,
+                Some(_) => 2,
+            }
+        });
 
         let selected_primary_plane = planes.primary.iter().find_map(|plane| {
             let claim = match self.plane_claim_storage.claim(plane.handle, crtc) {
